@@ -50,16 +50,16 @@ Log In into your Arduino account and the Edge Impulse account and then train you
 
 ![Train the model](assets/img/train-the-model.png)
 
-Go to deploy the model as `Arduino VENTUNO Q` or as `Linux AARCH64 with Qualcomm QNN`. 
+Go to deploy the model as `Arduino VENTUNO Q` or as `Linux AARCH64 with Qualcomm QNN`.
 
 ![Deploy the model as Arduino UNO Q or Linux aarch64](assets/img/edge-impulse-project.png)
 
 Then the deployed models will appear in the brick of the Arduino App Lab when you will go to the `AI models` tab. Select the `Rock paper scissors` model.
 
 
-### Step 2.1: Deploy the local LLM 
+### Step 2.1: Deploy the local LLM
 
-Select the brick `Large Language Model LLM` and then go to the tab `AI models`. 
+Select the brick `Large Language Model LLM` and then go to the tab `AI models`.
 
 <img width="1024" alt="Install LLM Gemma 3 1B to the application" src="https://github.com/user-attachments/assets/b1a42a5d-bdaf-4aed-b7ef-f2cdfc201d32" />
 
@@ -80,7 +80,7 @@ Alternatively, via SSH you can start the application using the Arduino App Lab C
 arduino-app-cli app start user:rock-paper-scissors-game
 ```
 
-Once successfully started, navigate to `http://<device-ip>:5001` in your browser and start playing!
+Once successfully started, navigate to `http://<device-ip>:7000` in your browser and start playing!
 
 <img width="1024" alt="Playing Rock Paper Scissors against the Arduino UNO Q" src="https://github.com/user-attachments/assets/27faa88b-0311-47c7-9fba-0d31438e45b4" />
 
@@ -104,23 +104,22 @@ All settings are in [python/main.py](python/main.py) at the top:
 | Setting | Default | Description |
 |---------|---------|-------------|
 | `CONFIDENCE_THRESHOLD` | `0.6` | Minimum confidence to accept a detection |
-| `PORT` | `5001` | Flask web server port (also set `FLASK_PORT` env var) |
 | `COUNTDOWN_SECS` | `3` | Countdown duration before evaluating |
 | `RESULT_HOLD_SECS` | `3` | How long the result stays on screen |
 
 
 ### Improving the model
 
-In case that you want to create your own object detection model using [Edge Impulse](https://edgeimp.com/edgeai). 
+In case that you want to create your own object detection model using [Edge Impulse](https://edgeimp.com/edgeai).
 
-Collect data, label it and train the neural network. Test it in Edge Impulse and when you will feel confident, deploy it as an Arduino UNO Q model or Linux aarch64. 
+Collect data, label it and train the neural network. Test it in Edge Impulse and when you will feel confident, deploy it as an Arduino UNO Q model or Linux aarch64.
 
 Then follow the same instructions that you performed to add it to the app's brick.
 
 
 ## Become an Edge Impulse expert
 
-Want to learn more about how Edge Impulse ork? Try one of the [Edge Impulse courses](https://www.edgeimpulse.com/blog/introduction-to-edge-ai-course/). 
+Want to learn more about how Edge Impulse ork? Try one of the [Edge Impulse courses](https://www.edgeimpulse.com/blog/introduction-to-edge-ai-course/).
 
 
 ## Troubleshooting

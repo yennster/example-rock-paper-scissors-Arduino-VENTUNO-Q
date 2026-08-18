@@ -617,3 +617,119 @@ Offered three options; user chose **"Keep LLM, throttle it."**
 
 - Appended Sessions 13 and 14; committed the non-blocking logging change
   (`python/main.py`) plus this log and pushed to `mpous/ventuno`.
+
+---
+
+## Session 15 — Migrate the custom Flask server to the WebUI Brick
+
+**Date:** 2026-08-18
+
+### User prompt
+
+> Let's modify this to use WebUI brick.
+
+Followed by:
+
+> Start implementation
+
+### Thinking / investigation notes
+
+- **Confirmed the app was still Flask-based:** `app.yaml` declared `ports: [5001]`
+  with no `web_ui` brick; `python/main.py` ran its own Flask server in a thread
+  and served `python/templates/index.html`, which polled `/api/state` every
+  500 ms and posted to `/api/play` / `/api/reset`.
+- **Read the WebUI brick docs and examples on-device** rather than guessing the
+  API:
+  - `…/assets/0.12.0/docs/arduino/web_ui/README.md` — high-level overview
+    (static files from `assets/`, default port 7000).
+  - `…/assets/0.12.0/api-docs/arduino/app_bricks/web_ui/API.md` — the real
+    signatures: `WebUI(addr, port, ui_path_prefix, api_path_prefix,
+    assets_dir_path=…, …)`, `expose_api(method, path, fn)`,
+    `expose_camera(path, camera, jpeg_quality)`, `on_connect(cb)` /
+    `on_disconnect(cb)` (callback receives the Socket.IO **session id**, not a
+    connection object), `on_message(message_type, cb)` (callback receives
+    `(sid, data)`; a non-`None` return is auto-emitted as `{type}_response`),
+    `send_message(message_type, message, room=None)` (targets a single client
+    when `room=sid`, since Socket.IO auto-joins each client to a room named
+    after its own sid).
+  - `…/examples/bricks/arduino/web_ui/01…05` and
+    `…/examples/core-and-foundational/08-web-ui-basics/01…05` — confirmed no
+    app.yaml `ports:` key is needed, and that **`App.run()` alone starts the
+    WebUI server** (none of the reference apps call `ui.start()` explicitly).
+  - `assets/libs/arduino.js` (the vendored client lib) — confirmed the browser
+    API mirrors the Python one 1:1: `new WebUI()`, `on_connect`,
+    `on_disconnect`, `on_message(event, cb)`, `send_message(event, data)`.
+- Tried `python3 -c "from arduino.app_bricks.web_ui import WebUI; help(WebUI)"`
+  first — failed (`ModuleNotFoundError`, the brick package isn't on the host
+  Python path, only inside the app's managed environment) — fell back to the
+  bundled docs/examples above, which turned out to be authoritative anyway.
+
+### Clarifying questions asked (and answers)
+
+| Question | Answer chosen |
+|----------|---------------|
+| State updates: WebSocket push vs. keep polling `/api/state`? | **WebSocket push** — `ui.send_message()` on every state change |
+| Port: keep `5001` or switch to the brick default? | **Switch to `7000`** |
+| Add a live camera preview via `expose_camera`? | **No** — keep the "Your Hand" panel emoji-only |
+
+### Plan presented
+
+Three phases: (1) backend — replace Flask with `WebUI`, add a
+`GameState.broadcast()` hook fired at every state mutation; (2) frontend — move
+`python/templates/index.html` into `assets/`, split out `assets/app.js`, vendor
+`assets/libs/`; (3) manifest/docs — update `app.yaml`, `requirements.txt`,
+`README.md`. Plan (with reference-example citations) was saved to session memory
+before implementation began.
+
+### Changes made
+
+**`app.yaml`**
+- Added `arduino:web_ui` to `bricks:`; removed the `ports: [5001]` key (the
+  brick owns its own port).
+
+**`python/main.py`**
+- Removed Flask entirely (import, `app = Flask(...)`, the `/`, `/api/state`,
+  `/api/play`, `/api/reset` routes, the Flask-serving thread, and the
+  `werkzeug` log-level silencing — no longer needed).
+- Added `from arduino.app_bricks.web_ui import WebUI` and `ui = WebUI()`
+  alongside the existing detector/LLM brick init.
+- Added `GameState.broadcast()` (`ui.send_message('state', self.to_dict())`),
+  called after every mutation that the UI needs to see: `update_detection`
+  (label changes only), each countdown tick, the `evaluating` → `result` →
+  `idle` transitions in `play_round`, `reset()`, `add_commentary()`, and
+  `set_commentating()` — so the whole game (detection, countdown, result,
+  commentary, reset) now streams live instead of being polled.
+- Added `on_client_connect(sid)` (pushes a `state` snapshot to just that client
+  via `room=sid`), and replaced the two POST routes with
+  `ui.on_message('play', handle_play)` / `ui.on_message('reset', handle_reset)`.
+- Simplified the entry point: dropped the manual Flask-thread launcher; now
+  just calls `_App.run()` (which starts the WebUI server too), with a fallback
+  warning if the `App` runner import failed.
+- Removed the now-unused `PORT` / `FLASK_PORT` config line.
+
+**`assets/index.html` + `assets/app.js`** *(new, replacing `python/templates/`)*
+- Moved the existing markup/CSS as-is into `assets/index.html`; replaced the
+  trailing inline `<script>` with `libs/socket.io.min.js`, `libs/arduino.js`,
+  `app.js`.
+- Rewrote the script as `assets/app.js`: `const ui = new WebUI()`;
+  `ui.on_message('state', update)` replaces the old `poll()` +
+  `fetch('/api/state')` loop (the `update(s)` DOM logic itself is unchanged —
+  it already consumed a state dict); `playRound()` / `resetGame()` now call
+  `ui.send_message('play' | 'reset')` instead of `fetch(...)`, and `resetGame()`
+  no longer duplicates a manual DOM reset — it just waits for the next `state`
+  push to repaint.
+- Vendored `assets/libs/socket.io.min.js` and `assets/libs/arduino.js` from the
+  bundled `05_send_message` brick example.
+- Deleted `python/templates/` and `python/requirements.txt` (Flask was the only
+  dependency).
+
+**`README.md`**
+- Updated the "Step 3" URL from `http://<device-ip>:5001` to
+  `http://<device-ip>:7000`; dropped the `PORT` / `FLASK_PORT` row from the
+  Configuration table (the brick owns the port now).
+
+### Outcome / status
+
+- `python3 -m py_compile python/main.py` passes; grepped the file to confirm no
+  leftover `flask` / `jsonify` / `render_template` / `PORT` references.
+

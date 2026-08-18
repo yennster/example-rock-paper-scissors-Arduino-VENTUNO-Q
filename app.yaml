@@ -1,8 +1,9 @@
 name: Rock Paper Scissors
-description: "Rock-Paper-Scissors game with Edge Impulse object detection on Arduino UNO Q"
-icon: "✂️"
-ports: [5001]
+description: Rock-Paper-Scissors game with Edge Impulse object detection on Arduino UNO Q
 bricks:
-- arduino:video_object_detection: {}
-- arduino:llm: {}
-
+- arduino:llm:
+    model: llamacpp:gemma-4-E2B_q4_0-it
+- arduino:video_object_detection:
+    model: ei-model-903134-1
+- arduino:web_ui
+icon: ✂️

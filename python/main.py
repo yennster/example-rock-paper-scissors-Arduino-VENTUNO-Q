@@ -4,7 +4,7 @@ Rock-Paper-Scissors Game — Arduino UNO Q
 
 Uses the video_object_detection brick for Edge Impulse inference.
 The brick manages the camera and runs detection in its Docker container.
-Flask on port 5001 serves the custom web UI.
+The web_ui brick serves the custom web UI and pushes state over WebSocket.
 """
 
 import os
@@ -12,12 +12,7 @@ import sys
 import time
 import queue
 import random
-import logging
 import threading
-from flask import Flask, render_template, jsonify
-
-# ─── Silence Flask HTTP logs ─────────────────────────────────────────────
-logging.getLogger('werkzeug').setLevel(logging.ERROR)
 
 # ─── Non-blocking logging ────────────────────────────────────────────────
 # Every detection stall we have hit traces back to a worker thread blocking
@@ -86,6 +81,11 @@ try:
 except ImportError:
     log("[WARN] LLM brick not available — commentary disabled")
 
+# ─── Web UI Brick ────────────────────────────────────────────────────────
+from arduino.app_bricks.web_ui import WebUI
+
+ui = WebUI()
+
 # ─── App Runner ──────────────────────────────────────────────────────────
 _App = None
 try:
@@ -101,7 +101,6 @@ except ImportError:
 
 # ─── Configuration ───────────────────────────────────────────────────────
 VALID_LABELS = {'rock', 'paper', 'scissors'}
-PORT = int(os.environ.get('FLASK_PORT', '5001'))
 COUNTDOWN_SECS = 3
 RESULT_HOLD_SECS = 3
 # Per-frame detection logging floods stdout; the App Lab log pipe then applies
@@ -144,6 +143,7 @@ class GameState:
             changed = label != prev
         if changed:
             log(f"[DETECT] {label} ({confidence:.0%})")
+            self.broadcast()
 
     def play_round(self):
         arduino_move = random.choice(['Rock', 'Paper', 'Scissors'])
@@ -164,11 +164,13 @@ class GameState:
         for tick in [3, 2, 1]:
             with self._lock:
                 self.countdown = tick
+            self.broadcast()
             time.sleep(1)
 
         with self._lock:
             self.state = 'evaluating'
             self.countdown = None
+        self.broadcast()
 
         human_move = detected.capitalize() if detected and detected in VALID_LABELS else None
 
@@ -203,6 +205,7 @@ class GameState:
             }
             self.history.insert(0, round_record)
             self.state = 'result'
+        self.broadcast()
 
         log(f"[GAME] Round {round_record['round']}: "
               f"Human={human_move or '?'} vs Arduino={arduino_move} -> {winner}")
@@ -215,6 +218,7 @@ class GameState:
         with self._lock:
             self.state = 'idle'
             self._detection_locked = False
+        self.broadcast()
 
         return round_record
 
@@ -222,10 +226,12 @@ class GameState:
         with self._lock:
             self.commentary.insert(0, text)
             del self.commentary[10:]
+        self.broadcast()
 
     def set_commentating(self, value):
         with self._lock:
             self.commentating = value
+        self.broadcast()
 
     def reset(self):
         with self._lock:
@@ -243,6 +249,10 @@ class GameState:
             self.commentating = False
             self.history.clear()
         log("[GAME] Scores reset")
+        self.broadcast()
+
+    def broadcast(self):
+        ui.send_message('state', self.to_dict())
 
     def to_dict(self):
         with self._lock:
@@ -399,33 +409,24 @@ if _detector:
     _detector.on_detect_all(handle_detections)
 
 
-# ─── Flask Application ───────────────────────────────────────────────────
-app = Flask(__name__)
+# ─── Web UI Actions ──────────────────────────────────────────────────────
+def on_client_connect(sid):
+    ui.send_message('state', game.to_dict(), room=sid)  # sync the new client immediately
 
 
-@app.route('/')
-def index():
-    return render_template('index.html')
-
-
-@app.route('/api/state')
-def api_state():
-    return jsonify(game.to_dict())
-
-
-@app.route('/api/play', methods=['POST'])
-def api_play():
-    state = game.to_dict()
-    if state['state'] != 'idle':
-        return jsonify({'status': 'busy', 'message': 'Round in progress'}), 409
+def handle_play(sid, data):
+    if game.to_dict()['state'] != 'idle':
+        return
     threading.Thread(target=game.play_round, daemon=True).start()
-    return jsonify({'status': 'ok', 'message': 'Round started'})
 
 
-@app.route('/api/reset', methods=['POST'])
-def api_reset():
+def handle_reset(sid, data):
     game.reset()
-    return jsonify({'status': 'ok'})
+
+
+ui.on_connect(on_client_connect)
+ui.on_message('play', handle_play)
+ui.on_message('reset', handle_reset)
 
 
 # ─── Entry Point ─────────────────────────────────────────────────────────
@@ -437,18 +438,10 @@ if __name__ == '__main__':
     log(f'[MODE] LLM: {"yes" if _llm else "no"}')
     log(f'[MODE] App runner: {"yes" if _App else "no"}')
 
-    threading.Thread(
-        target=lambda: app.run(
-            host='0.0.0.0', port=PORT, threaded=True, use_reloader=False
-        ),
-        daemon=True
-    ).start()
-    log(f'[WEB] http://0.0.0.0:{PORT}')
-
     if _App:
         _App.run()
     else:
-        log('[INFO] Running standalone (no App runner)')
+        log('[WARN] No App runner — the WebUI brick needs App.run() to start its server')
         try:
             while True:
                 time.sleep(1)
