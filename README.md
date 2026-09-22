@@ -159,26 +159,43 @@ Want to learn more about how Edge Impulse ork? Try one of the [Edge Impulse cour
 
 **`error gathering device information while adding custom device "/dev/fastrpc-cdsp"`:**
 
-This is a board-level failure, not an app bug — the app never gets to start.
+This is a platform/startup failure, not a bug in this app's code — the app never gets to
+start.
 
 On the UNO Q the object detection brick runs the **QNN** (Hexagon DSP) model runner, and
-its compose file requires the `/dev/fastrpc-cdsp` device node. That node only exists when
-the CDSP remote processor has booted successfully. The CDSP is known to **intermittently
-fail to come up at boot** (see [qualcomm-linux/kernel#1086](https://github.com/qualcomm-linux/kernel/issues/1086));
-when it does, every `/dev/fastrpc-cdsp*` node is missing and Docker refuses to create the
-container. This is why the app can start after one boot and fail after the next.
+both it and the LLM brick declare `/dev/fastrpc-cdsp` in their compose files as a plain
+`devices:` entry. Docker `stat()`s that path when it creates the container and aborts
+immediately if it is missing — there is no retry and no wait. The node only exists once
+the CDSP remote processor has finished booting its Hexagon firmware and the `fastrpc`
+driver has registered the misc device.
+
+There are two distinct reasons the node can be missing:
+
+1. **The app started before the CDSP finished booting.** This is the usual cause when the
+   app *works tethered over USB but fails when the board runs standalone*. Launching from
+   App Lab on your computer happens long after the board has settled, so the node is
+   already there. A standalone autostart unit, by contrast, only waits for Docker and the
+   `arduino-app-cli` daemon socket — neither of which says anything about CDSP readiness —
+   so it can win the race against the DSP bring-up and fail. Same board, same image, just
+   less elapsed time before the container is created.
+2. **The CDSP genuinely failed to come up.** It is known to intermittently fail at boot
+   (see [qualcomm-linux/kernel#1086](https://github.com/qualcomm-linux/kernel/issues/1086)).
+   In that case the node never appears at all for that boot.
 
 Diagnose it over SSH on the board:
 
 ```bash
 ls -l /dev/fastrpc*                       # cdsp node present at all?
 for r in /sys/class/remoteproc/remoteproc*; do echo "$r $(cat $r/name) $(cat $r/state)"; done
-dmesg | grep -iE 'fastrpc|remoteproc|cdsp|q6v5'
+dmesg -T | grep -iE 'fastrpc|remoteproc|cdsp|q6v5'
 ```
 
-A failed CDSP bring-up looks like `start timed out` followed by
-`remoteproc remoteprocN: can't start rproc cdsp: -110`, and `/dev/fastrpc-adsp` will
-usually still be present while `/dev/fastrpc-cdsp` is not.
+To tell the two cases apart, look at the timestamps: if `/dev/fastrpc-cdsp` exists *now*
+and the CDSP remoteproc reports `running`, but the app failed at boot, it was the race
+(case 1). If the node is still absent and `dmesg` shows `start timed out` followed by
+`remoteproc remoteprocN: can't start rproc cdsp: -110`, the CDSP failed outright (case 2).
+In both cases `/dev/fastrpc-adsp` usually remains present, so its presence alone does not
+mean the DSP stack is healthy.
 
 Recovery, in order of least effort:
 
@@ -192,7 +209,40 @@ Recovery, in order of least effort:
    ls -l /dev/fastrpc*
    ```
 
+   This only helps if the remoteproc entry exists but is wedged; it cannot create a node
+   the kernel never enumerated.
 3. Once the node is back, start the app again — no changes to the app are needed.
+
+**Fixing it permanently for standalone boots.** If you autostart the app with a systemd
+unit, make the unit wait for the device node instead of starting as soon as the App Lab
+daemon is listening. Add an `ExecStartPre` guard ahead of the existing ones:
+
+```ini
+[Service]
+ExecStartPre=/bin/sh -c 'until [ -e /dev/fastrpc-cdsp ]; do sleep 1; done'
+TimeoutStartSec=120
+```
+
+The `until … do sleep 1; done` form mirrors the guard in Arduino's own autostart examples
+and deliberately avoids `$`, which systemd would otherwise try to expand as a variable.
+`TimeoutStartSec` bounds the wait so a dead CDSP fails the unit instead of hanging boot.
+
+systemd also auto-generates a device unit for the node, so
+`After=dev-fastrpc\x2dcdsp.device` is a native alternative worth trying alongside it.
+
+Reload and verify after editing:
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl restart <your-app>-autostart.service
+systemctl status <your-app>-autostart.service
+```
+
+The device request itself cannot be made optional from `app.yaml` — it is baked into the
+brick compose files in [`arduino/app-bricks-py`](https://github.com/arduino/app-bricks-py).
+Arduino is reworking this to use existence-tolerant `device_cgroup_rules` in
+[arduino/arduino-app-cli#635](https://github.com/arduino/arduino-app-cli/pull/635), so a
+future App Lab update should remove the need for the workaround above.
 
 If the CDSP never comes up on any boot, the Hexagon firmware may be missing; check
 `dmesg` for remoteproc firmware-load errors and for the presence of the DSP images that
