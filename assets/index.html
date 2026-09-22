@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Rock Paper Scissors</title>
+    <title>Rock Paper Scissors TTC 2026</title>
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
 
@@ -168,6 +168,121 @@
             100% { transform: scale(1);   opacity: 1; }
         }
 
+        /* ── Live Camera ── */
+        .camera-card {
+            max-width: 960px;
+            margin: 16px auto 0;
+            padding: 0 16px;
+        }
+        .camera-frame {
+            border: 2px solid #f0f0f0;
+            border-radius: 12px;
+            overflow: hidden;
+            background: #fafafa;
+            position: relative;
+        }
+        .camera-head {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 6px 12px;
+            font-size: 11px;
+            text-transform: uppercase;
+            letter-spacing: 1.5px;
+            color: #999;
+            border-bottom: 1px solid #f0f0f0;
+            background: #fff;
+        }
+        .camera-head .live-dot {
+            width: 7px;
+            height: 7px;
+            border-radius: 50%;
+            background: #d4d4d4;
+        }
+        .camera-head.streaming .live-dot {
+            background: #16a34a;
+            animation: pulse 1.4s infinite;
+        }
+        .camera-hint { margin-left: auto; text-transform: none; letter-spacing: 0; font-size: 11px; color: #bbb; }
+
+        /* The stage is the shared coordinate space for the video, the bounding
+           boxes and the translucent prediction overlay — they are all stacked
+           on top of each other and sized identically. */
+        .camera-stage {
+            position: relative;
+            width: 100%;
+            aspect-ratio: 4 / 3;
+            background: #0b0b0b;
+            overflow: hidden;
+        }
+        .camera-stage img,
+        .camera-stage canvas,
+        .camera-tint,
+        .camera-overlay {
+            position: absolute;
+            inset: 0;
+            width: 100%;
+            height: 100%;
+        }
+        .camera-stage img {
+            object-fit: contain;
+            display: block;
+        }
+        .camera-stage canvas { pointer-events: none; }
+
+        /* Transparent wash in the predicted class's colour — you can still see
+           the camera straight through it. The inset ring makes the prediction
+           read at a glance without hiding any of the frame. */
+        .camera-tint {
+            pointer-events: none;
+            background: transparent;
+            box-shadow: none;
+            transition: background 0.25s ease, box-shadow 0.25s ease;
+        }
+        .camera-overlay {
+            pointer-events: none;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            text-align: center;
+        }
+        .camera-overlay-emoji {
+            font-size: 130px;
+            line-height: 1;
+            opacity: 0;
+            transform: scale(0.85);
+            transition: opacity 0.25s ease, transform 0.25s ease;
+            filter: drop-shadow(0 2px 14px rgba(0,0,0,0.65));
+        }
+        .camera-overlay.has-detection .camera-overlay-emoji {
+            opacity: 0.42;
+            transform: scale(1);
+        }
+        .camera-overlay-label {
+            margin-top: 10px;
+            font-size: 13px;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 2px;
+            color: rgba(255,255,255,0.55);
+            text-shadow: 0 1px 6px rgba(0,0,0,0.8);
+        }
+        .camera-overlay.has-detection .camera-overlay-label { color: #fff; }
+        .camera-status {
+            position: absolute;
+            inset: 0;
+            display: none;
+            align-items: center;
+            justify-content: center;
+            color: #666;
+            font-size: 13px;
+            background: #0b0b0b;
+            text-align: center;
+            padding: 16px;
+        }
+        .camera-status.show { display: flex; }
+
         /* ── Result Banner ── */
         .result-banner {
             text-align: center;
@@ -283,6 +398,7 @@
             display: flex;
             align-items: center;
             justify-content: center;
+            gap: 12px;
             padding: 20px 16px 8px;
         }
         .btn-play {
@@ -295,10 +411,30 @@
             color: #fff;
             cursor: pointer;
             letter-spacing: 0.3px;
-            transition: opacity 0.15s;
+            transition: opacity 0.15s, background 0.15s;
         }
         .btn-play:hover { opacity: 0.85; }
         .btn-play:disabled { opacity: 0.35; cursor: not-allowed; }
+        .btn-play.playing { background: #dc2626; }
+        .btn-secondary {
+            padding: 12px 24px;
+            font-size: 14px;
+            font-weight: 600;
+            border: 1px solid #e0e0e0;
+            border-radius: 8px;
+            background: #fff;
+            color: #666;
+            cursor: pointer;
+            letter-spacing: 0.3px;
+            transition: all 0.15s;
+        }
+        .btn-secondary:hover { border-color: #dc2626; color: #dc2626; }
+        .play-hint {
+            text-align: center;
+            font-size: 12px;
+            color: #aaa;
+            padding: 0 16px 4px;
+        }
 
         /* ── History ── */
         .history {
@@ -344,24 +480,9 @@
             font-size: 13px;
         }
 
-        /* ── Reset ── */
         .footer {
-            text-align: center;
             padding: 16px 16px 32px;
         }
-        .btn-reset {
-            padding: 8px 24px;
-            font-size: 12px;
-            font-weight: 600;
-            border: 1px solid #e0e0e0;
-            border-radius: 6px;
-            background: #fff;
-            color: #999;
-            cursor: pointer;
-            letter-spacing: 0.5px;
-            transition: all 0.15s;
-        }
-        .btn-reset:hover { border-color: #dc2626; color: #dc2626; }
 
         /* ── Responsive ── */
         @media (max-width: 900px) {
@@ -379,8 +500,9 @@
             .score-value { font-size: 36px; }
             .scoreboard { gap: 24px; padding: 16px; }
             .move-emoji, .detect-emoji { font-size: 80px; }
+            .camera-overlay-emoji { font-size: 90px; }
             .controls { flex-direction: column; }
-            .btn-play { width: 100%; }
+            .btn-play, .btn-secondary { width: 100%; }
         }
     </style>
 </head>
@@ -389,7 +511,7 @@
     <!-- Header -->
     <div class="header">
         <img src="https://cdn.prod.website-files.com/618cdeef45d18e4ef2fd85f3/618e33d89badebdfe7c5897a_Logo%20(2).svg" alt="Edge Impulse">
-        <h1>Rock Paper Scissors</h1>
+        <h1>Rock Paper Scissors TTC 2026</h1>
     </div>
 
     <div class="layout">
@@ -429,13 +551,36 @@
         </div>
     </div>
 
+    <!-- Live Camera: MJPEG feed + bounding boxes + translucent prediction overlay -->
+    <div class="camera-card">
+        <div class="camera-frame">
+            <div class="camera-head" id="cameraHead">
+                <span class="live-dot"></span>
+                <span>Live Camera</span>
+                <span class="camera-hint" id="cameraHint">connecting&hellip;</span>
+            </div>
+            <div class="camera-stage" id="cameraStage">
+                <img id="cameraFeed" alt="Live camera feed">
+                <canvas id="boxCanvas"></canvas>
+                <div class="camera-tint" id="cameraTint"></div>
+                <div class="camera-overlay" id="cameraOverlay">
+                    <div class="camera-overlay-emoji" id="cameraEmoji">&#x270B;</div>
+                    <div class="camera-overlay-label" id="cameraLabel">Show your hand</div>
+                </div>
+                <div class="camera-status" id="cameraStatus">Camera feed unavailable</div>
+            </div>
+        </div>
+    </div>
+
     <!-- Result Banner -->
     <div class="result-banner" id="resultBanner"></div>
 
     <!-- Controls -->
     <div class="controls">
-        <button class="btn-play" id="playBtn" onclick="playRound()">Play Round</button>
+        <button class="btn-play" id="playBtn" onclick="togglePlay()">Start Match</button>
+        <button class="btn-secondary" id="resetBtn" onclick="resetGame()">Reset</button>
     </div>
+    <div class="play-hint" id="playHint">Rounds run back to back &mdash; your gesture is read the moment the countdown hits zero.</div>
 
     <!-- History -->
     <div class="history">
@@ -454,10 +599,7 @@
         <div class="no-history" id="noHist">No rounds played yet</div>
     </div>
 
-    <!-- Reset -->
-    <div class="footer">
-        <button class="btn-reset" onclick="resetGame()">Reset Game</button>
-    </div>
+    <div class="footer"></div>
 
     </div><!-- /.main -->
 

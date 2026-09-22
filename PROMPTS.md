@@ -733,3 +733,132 @@ before implementation began.
 - `python3 -m py_compile python/main.py` passes; grepped the file to confirm no
   leftover `flask` / `jsonify` / `render_template` / `PORT` references.
 
+
+---
+
+## Session 16 — Live camera feed with bounding boxes + continuous play
+
+**Date:** 2026-09-22
+
+### User prompt
+
+> This app works perfectly right now, but underneath the area where the edge
+> impulse model detects rock, paper or scissors i want there to be a live
+> camera feed showing the bounding boxes of the detected hand/object, and there
+> should be a transparent colored overlay over the live feed showing the
+> predicted object (like there is right now with the emoji as well just
+> transparent so you can see the camera feed)
+>
+> Also, append "TTC 2026" to the app name
+>
+> Also I want the game to be more continuous than it is right now, currently
+> you have to lock in your answer and i want to not have to do that maybe like
+> a countdown and a reset button or something what do you think
+
+### Thinking / investigation notes
+
+**Session 15 had explicitly declined a live preview** — worth re-opening only
+because the naive approach (a second camera reader) is not the only option.
+
+- **Why not `WebUI.expose_camera` with a shared `Camera`:** read the brick
+  source (`github.com/arduino/app-bricks-py`, tag `release/0.12.0`, the version
+  on-device). `BaseCamera.capture()` defaults to **10 fps** and hands each
+  frame to exactly one caller, so a second reader would halve the detector's
+  input rate. The detection brick's container also owns the camera device.
+- **What we used instead:** `VideoObjectDetection(..., camera_preview=True)`
+  makes the Edge Impulse model runner push
+  `{"type": "camera-preview", "image": "data:image/jpeg;base64,…"}` over its
+  WebSocket on **every camera snapshot**, and the brick stores the newest one
+  in `_last_camera_frame`. We relay that as MJPEG — zero extra camera load.
+- **The quirk that would have frozen the feed:** the brick only invokes the
+  app's detection callback when there is ≥1 detection (`on_detect_all` never
+  fires on an empty frame). So a pump thread polls `_last_camera_frame`
+  (defensively, via `getattr`) instead of relying on the callback, and falls
+  back to callback frames if the private attribute ever disappears.
+- **Bounding-box coordinate space** — the thing that would have been painful to
+  get wrong. `brick_compose.yaml` launches the runner with
+  `--preview-original-resolution`. Checked `cli/linux/runner-utils.ts` in
+  `edgeimpulse/edge-impulse-linux-cli`: in that mode `scaleAndMapBbs()`
+  rescales boxes from model-input coords to **camera resolution**, and the
+  preview image is the raw camera JPEG (no re-encode). So boxes line up 1:1
+  with the relayed frame; the browser only has to undo the `object-fit:
+  contain` letterboxing. (In the other mode, `scaled-using-impulse`, both the
+  preview and the boxes stay in model coords — also 1:1. Normalising against
+  the `<img>`'s `naturalWidth`/`naturalHeight` is correct either way.)
+- **Confirmed `send_message` is non-blocking** (`asyncio.run_coroutine_threadsafe`,
+  returns immediately) — important given Sessions 11/13, where a blocking write
+  from the detection thread stalled the detector.
+- **Confirmed `/camera` is not shadowed by the static mount:** `expose_api` runs
+  at import, `_init_static_routes()` only runs inside `WebUI.start()`, and
+  Starlette matches routes in registration order.
+- Boxes go out on their own `detections` WebSocket channel rather than being
+  folded into the `state` payload, so ~10 box updates/sec don't drag the whole
+  game state (history, commentary) along with them.
+
+### Changes made
+
+**`python/main.py`**
+- `VideoObjectDetection(..., camera_preview=True)`, wrapped in a `TypeError`
+  fallback for bricks older than 0.12.0.
+- New "Live Camera Relay" block: `publish_frame()`, `preview_pump()` (polls the
+  brick's newest frame, dedups by object identity to avoid comparing ~80 KB
+  strings 20×/sec), and `mjpeg_frames()` (condition-variable backed, so viewers
+  block instead of spinning). Registered as `GET /camera` via `ui.expose_api`,
+  only when the detector actually exists.
+- `publish_boxes()` + `boxes_watchdog()` + `_iter_details()` — normalises the
+  three payload shapes the brick can emit (`{label: float}`,
+  `{label: {...}}`, `{label: [{...}, ...]}`) and preserves multiple boxes per
+  label. `handle_detections` gained a `frame=None` parameter (the brick
+  inspects the signature and only passes frames to handlers that declare it).
+- **Continuous play:** `play_round()` rewritten as countdown → shoot → result,
+  with the gesture sampled *at the instant the countdown hits zero* instead of
+  being locked in up front. Added `auto`, an `_abort` Event, `start_auto()` /
+  `stop_auto()` / `_wait()` / `_abandon()`, and a `round_loop()` worker that
+  runs rounds back to back. WebSocket actions changed from `play`/`reset` to
+  `start`/`pause`/`reset`.
+- `enqueue_milestone()` now drops events while one is pending or within
+  `COMMENTARY_MIN_INTERVAL` (8 s) — with rounds looping non-stop, the CPU-heavy
+  local LLM would otherwise starve the detector again (cf. Session 11).
+
+**`assets/index.html` + `assets/app.js`**
+- New Live Camera card below the panels grid: `<img src="/camera">` +
+  `<canvas>` overlay + a translucent class-coloured tint + a see-through emoji.
+- Letterbox-aware box drawing with per-class colours (rock = amber,
+  paper = blue, scissors = purple), label clamping at the frame edges, and DPR
+  scaling.
+- Controls became Start/Pause + Reset; removed the duplicate footer reset
+  button and its dead CSS.
+
+**`app.yaml` / `README.md`** — renamed to "Rock Paper Scissors TTC 2026";
+rewrote the "Game flow" section for continuous play, expanded the
+Configuration table with the new env vars, and added a "Live Camera panel
+stays black" troubleshooting entry.
+
+### Bugs found while testing
+
+- **The overlay watchdog never fired.** `publish_boxes()` set
+  `_boxes_cleared = not boxes`, so a detection that carried a label but *no*
+  bounding box (the plain-float payload shape) marked the overlay
+  "already cleared" and the stale gesture stuck on screen forever. Fixed by
+  tracking detection *liveness* (`_detect_last_ts` / `_overlay_live`) rather
+  than box emptiness.
+- **A start/abort ordering race.** `start_auto()` set `auto = True` before
+  clearing `_abort`; the round loop could observe `auto` in that window and
+  abandon the fresh round on a stale abort flag. Clearing `_abort` first fixes
+  it.
+
+### Outcome / status
+
+- Backend harness (fake bricks + a real uvicorn server for the MJPEG route):
+  all checks pass — brick wiring, box extraction, the watchdog, the preview
+  relay, multipart MJPEG over real HTTP, three continuous rounds with no user
+  input, lock-only-at-shoot, pause, reset, LLM throttling, JSON
+  serialisability.
+- Frontend harness (jsdom + a recording canvas stub): all checks pass,
+  including the exact letterbox coordinate maths for a deliberately
+  letterboxed 640×480-into-800×480 case.
+- Visual spot-check of idle / countdown / shoot / result / camera-offline
+  states via headless screenshots.
+- Not yet run on real UNO Q hardware. The relay depends on the brick's private
+  `_last_camera_frame`; it is guarded with `getattr` and documented in the
+  README troubleshooting section.

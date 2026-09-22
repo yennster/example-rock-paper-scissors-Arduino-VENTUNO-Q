@@ -1,4 +1,4 @@
-name: Rock Paper Scissors
+name: Rock Paper Scissors TTC 2026
 description: Rock-Paper-Scissors game with Edge Impulse object detection on Arduino UNO Q
 bricks:
 - arduino:llm:

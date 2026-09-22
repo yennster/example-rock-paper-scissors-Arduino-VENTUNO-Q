@@ -1,4 +1,4 @@
-# Rock Paper Scissors Game with Arduino VENTUNO Q
+# Rock Paper Scissors TTC 2026 — Arduino VENTUNO Q
 
 A real-time Rock-Paper-Scissors game running on the Arduino UNO Q using an Edge Impulse object detection model.
 
@@ -90,22 +90,35 @@ Good luck!
 
 ### Game flow
 
-1. Show your hand gesture (rock, paper, or scissors) to the camera.
-2. The detection panel on the left shows what the model sees in real-time after running inference on a local object detection Edge Impulse model.
-3. Click **Play Round** — your gesture is **locked in** at that moment.
-4. The Arduino reveals its random move and the winner is shown
+The match is **continuous** — there is nothing to lock in. Press start once and rounds
+keep coming until you pause.
 
+1. Press **Start Match**. A 3-2-1 countdown runs for each round.
+2. Show your hand gesture (rock, paper, or scissors) to the camera. You can keep changing
+   it right up to the last instant.
+3. Your gesture is read **at the moment the countdown hits zero** ("shoot!"), and the
+   Arduino reveals its random move.
+4. The result is held on screen for a moment, then the next countdown starts automatically.
+5. **Pause** stops the loop after the current round; **Reset** clears the scores, history
+   and commentary.
 
+While all of this happens, the **Live Camera** panel shows the feed straight from the
+model runner with the detected bounding boxes drawn on top, plus a transparent coloured
+wash and emoji for whatever class is currently predicted — so you can see exactly what
+the model sees.
 
 ## Configuration
 
-All settings are in [python/main.py](python/main.py) at the top:
+All settings are in [python/main.py](python/main.py) at the top. Each one can also be
+overridden with an environment variable of the same name.
 
 | Setting | Default | Description |
 |---------|---------|-------------|
-| `CONFIDENCE_THRESHOLD` | `0.6` | Minimum confidence to accept a detection |
-| `COUNTDOWN_SECS` | `3` | Countdown duration before evaluating |
-| `RESULT_HOLD_SECS` | `3` | How long the result stays on screen |
+| `CONFIDENCE` | `0.4` | Minimum confidence to accept a detection (`CONFIDENCE_THRESHOLD`) |
+| `COUNTDOWN_SECS` | `3` | Countdown duration before the gesture is read |
+| `RESULT_HOLD_SECS` | `3.5` | How long the result stays on screen before the next round |
+| `COMMENTARY_MIN_INTERVAL` | `8` | Minimum seconds between LLM commentary lines |
+| `DEBUG_DETECTIONS` | unset | Set to `1` to log every raw detection payload |
 
 
 ### Improving the model
@@ -129,6 +142,15 @@ Want to learn more about how Edge Impulse ork? Try one of the [Edge Impulse cour
 - Check that `App.run()` is active: look for `[MODE] App runner: yes` in logs
 - Look for `[BRICK-RAW]` lines — if absent, the brick callback isn't firing
 - Ensure your model labels match `rock`, `paper`, `scissors` (lowercase)
+
+**The Live Camera panel stays black / "Waiting for the camera feed…":**
+- Look for `[CAMERA] Live preview stream active` in the logs. If you instead see
+  `[CAMERA] No preview frames yet from the model runner`, the brick is running but the
+  model runner has not sent a preview frame yet — give it a few seconds after start-up.
+- If the logs say `no camera preview support`, the installed `video_object_detection`
+  brick predates the `camera_preview` option. Update Arduino App Lab; the game still
+  works, just without the live feed.
+- The feed is served by the app itself at `/camera` (MJPEG) on the same port as the UI.
 
 **"App runner: no" in logs:**
 - The `App` class couldn't be imported. Make sure you're running via `arduino-app-cli app start`, not `python3 main.py` directly
