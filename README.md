@@ -157,6 +157,47 @@ Want to learn more about how Edge Impulse ork? Try one of the [Edge Impulse cour
   works, just without the live feed.
 - The feed is served by the app itself at `/camera` (MJPEG) on the same port as the UI.
 
+**`error gathering device information while adding custom device "/dev/fastrpc-cdsp"`:**
+
+This is a board-level failure, not an app bug — the app never gets to start.
+
+On the UNO Q the object detection brick runs the **QNN** (Hexagon DSP) model runner, and
+its compose file requires the `/dev/fastrpc-cdsp` device node. That node only exists when
+the CDSP remote processor has booted successfully. The CDSP is known to **intermittently
+fail to come up at boot** (see [qualcomm-linux/kernel#1086](https://github.com/qualcomm-linux/kernel/issues/1086));
+when it does, every `/dev/fastrpc-cdsp*` node is missing and Docker refuses to create the
+container. This is why the app can start after one boot and fail after the next.
+
+Diagnose it over SSH on the board:
+
+```bash
+ls -l /dev/fastrpc*                       # cdsp node present at all?
+for r in /sys/class/remoteproc/remoteproc*; do echo "$r $(cat $r/name) $(cat $r/state)"; done
+dmesg | grep -iE 'fastrpc|remoteproc|cdsp|q6v5'
+```
+
+A failed CDSP bring-up looks like `start timed out` followed by
+`remoteproc remoteprocN: can't start rproc cdsp: -110`, and `/dev/fastrpc-adsp` will
+usually still be present while `/dev/fastrpc-cdsp` is not.
+
+Recovery, in order of least effort:
+
+1. **Reboot the board.** Because the failure is intermittent, the next boot usually
+   brings the CDSP up. Confirm with `ls -l /dev/fastrpc*` before starting the app.
+2. **Restart the CDSP remoteproc in place** (substitute the index whose `name` is `cdsp`):
+
+   ```bash
+   sudo sh -c 'echo stop  > /sys/class/remoteproc/remoteprocN/state'
+   sudo sh -c 'echo start > /sys/class/remoteproc/remoteprocN/state'
+   ls -l /dev/fastrpc*
+   ```
+
+3. Once the node is back, start the app again — no changes to the app are needed.
+
+If the CDSP never comes up on any boot, the Hexagon firmware may be missing; check
+`dmesg` for remoteproc firmware-load errors and for the presence of the DSP images that
+the brick mounts from `/usr/share/qcom`.
+
 **"App runner: no" in logs:**
 - The `App` class couldn't be imported. Make sure you're running via `arduino-app-cli app start`, not `python3 main.py` directly
 
