@@ -77,8 +77,13 @@ Click on the `Rock Paper Scissors` application and then click `Run`.
 Alternatively, via SSH you can start the application using the Arduino App Lab CLI.
 
 ```bash
+arduino-app-cli app list           # confirm the app id
 arduino-app-cli app start user:rock-paper-scissors-game
 ```
+
+> After editing the app you must copy it to the board again (Step 1) and
+> restart it — App Lab runs its own copy under `/home/arduino/ArduinoApps/`,
+> so local edits are not picked up until they are transferred.
 
 Once successfully started, navigate to `http://<device-ip>:7000` in your browser and start playing!
 
